@@ -1,0 +1,24 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Personal images
+mom_*.jpg
+img*_nan.jpg
+multiple_face.JPG
+single_face.jpeg
+
+# Test videos
+faces_testing.mp4
+
+# Personal / known face data
+known_faces/
+embeddings_for_known_faces/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
