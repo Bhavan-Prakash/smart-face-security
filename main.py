@@ -65,7 +65,7 @@ class LatestFrameReader:
         if self.cap is not None:
             self.cap.release()
 
-# cap = cv2.VideoCapture("rtsp://admin:Nandan%40070904@192.168.29.100")
+# cap = cv2.VideoCapture("")
 
 # cap = cv2.VideoCapture("/Users/bhavan/Documents/codes/Home_Security_Face_Recognition/faces_testing.mp4")
 
@@ -405,7 +405,7 @@ frame_number = 0
 track_memory = {}
 recognition_count = 0
 
-cap = LatestFrameReader("rtsp://admin:Nandan%40070904@192.168.29.100")
+cap = LatestFrameReader("")
 
 while True:
     ret, frame = cap.read()
