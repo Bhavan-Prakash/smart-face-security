@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import time
 import threading
 import queue
-
+import requests
 
 class LatestFrameReader:
     def __init__(self, src, retries=5, delay=2):
@@ -407,6 +407,81 @@ recognition_count = 0
 
 cap = LatestFrameReader("")
 
+
+
+# ============================================================
+# BACKEND API
+# ============================================================
+
+# ============================================================
+# BACKEND API
+# ============================================================
+
+BACKEND_URL = "http://127.0.0.1:8000"
+CAMERA_ID = "entrance"
+
+def _send_recognition_event(
+    person_name,
+    similarity,
+    track_id
+):
+
+    payload = {
+        "camera_id": CAMERA_ID,
+        "person_name": person_name,
+        "similarity": float(similarity),
+        "track_id": int(track_id)
+    }
+
+    try:
+
+        response = requests.post(
+            f"{BACKEND_URL}/api/recognitions",
+            json=payload,
+            timeout=1
+        )
+
+        if response.status_code == 200:
+
+            print(
+                f"[API] Recognition sent: "
+                f"{person_name} "
+                f"(track={track_id}, "
+                f"similarity={similarity:.3f})"
+            )
+
+        else:
+
+            print(
+                f"[API] Failed: "
+                f"{response.status_code}"
+            )
+
+    except requests.RequestException as e:
+
+        print(
+            f"[API] Backend unavailable: {e}"
+        )
+
+def send_recognition_event(
+    person_name,
+    similarity,
+    track_id
+):
+
+    thread = threading.Thread(
+        target=_send_recognition_event,
+        args=(
+            person_name,
+            similarity,
+            track_id
+        ),
+        daemon=True
+    )
+
+    thread.start()
+
+
 while True:
     ret, frame = cap.read()
 
@@ -492,11 +567,15 @@ while True:
                 "last_seen_time": time.time()
             }
 
-            # print(
-            #     f"Track {track_id} recognized as "
-            #     f"{name} "
-            #     f"(similarity={similarity:.3f})"
-            # )
+            # ========================================================
+            # SEND NEW RECOGNITION TO BACKEND
+            # ========================================================
+
+            send_recognition_event(
+                person_name=name,
+                similarity=similarity,
+                track_id=track_id
+            )
 
         else:
 

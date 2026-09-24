@@ -1,24 +1,34 @@
-# Python virtual environment
+# Python
+__pycache__/
+*.py[cod]
 .venv/
 venv/
 env/
 
-# Personal images
-mom_*.jpg
-img*_nan.jpg
-multiple_face.JPG
-single_face.jpeg
+# Personal images / videos
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.mov
+*.avi
+*.mkv
 
-# Test videos
-faces_testing.mp4
-
-# Personal / known face data
+# Face data / embeddings
 known_faces/
 embeddings_for_known_faces/
+data/
 
-# Python cache
-__pycache__/
-*.pyc
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+*.crt
 
 # macOS
 .DS_Store
+
+# IDE
+.vscode/
+.idea/

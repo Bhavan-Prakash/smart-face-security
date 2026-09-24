@@ -1,0 +1,281 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>{{ camera.name }} - Home Security</title>
+
+    <link
+        rel="stylesheet"
+        href="/static/style.css"
+    >
+
+</head>
+
+
+<body>
+
+    <div class="container">
+
+        <header class="header">
+
+            <div>
+
+                <a
+                    href="/"
+                    class="back-button"
+                >
+                    ← Cameras
+                </a>
+
+                <h1>
+                    {{ camera.name }}
+                </h1>
+
+                <p class="subtitle">
+                    {{ camera.location }}
+                </p>
+
+            </div>
+
+        </header>
+
+
+        <section>
+
+            <div class="section-header">
+
+                <div>
+
+                    <h2>
+                        Today's Recognitions
+                    </h2>
+
+                    <p id="current-date"></p>
+
+                </div>
+
+                <button
+                    onclick="loadRecognitions()"
+                    class="refresh-button"
+                >
+                    Refresh
+                </button>
+
+            </div>
+
+
+            <div class="table-container">
+
+                <table>
+
+                    <thead>
+
+                        <tr>
+
+                            <th>
+                                Person
+                            </th>
+
+                            <th>
+                                Time
+                            </th>
+
+                            <th>
+                                Similarity
+                            </th>
+
+                            <th>
+                                Track ID
+                            </th>
+
+                        </tr>
+
+                    </thead>
+
+                    <tbody id="recognition-table">
+
+                    </tbody>
+
+                </table>
+
+
+                <div
+                    id="empty-message"
+                    class="empty-message"
+                >
+                    No recognitions recorded today.
+                </div>
+
+            </div>
+
+        </section>
+
+    </div>
+
+
+<script>
+
+    const cameraId = "{{ camera.camera_id }}";
+
+
+    // ---------------------------------------------
+    // Current date
+    // ---------------------------------------------
+
+    function displayCurrentDate() {
+
+        const today = new Date();
+
+        const formattedDate =
+            today.toLocaleDateString(
+                "en-IN",
+                {
+                    day: "numeric",
+                    month: "long",
+                    year: "numeric"
+                }
+            );
+
+        document.getElementById(
+            "current-date"
+        ).textContent = formattedDate;
+
+    }
+
+
+    // ---------------------------------------------
+    // Load recognition records
+    // ---------------------------------------------
+
+    async function loadRecognitions() {
+
+        try {
+
+            const response = await fetch(
+                `/api/cameras/${cameraId}/recognitions/today`
+            );
+
+
+            if (!response.ok) {
+
+                throw new Error(
+                    "Failed to load recognitions"
+                );
+
+            }
+
+
+            const recognitions =
+                await response.json();
+
+
+            const table =
+                document.getElementById(
+                    "recognition-table"
+                );
+
+
+            const emptyMessage =
+                document.getElementById(
+                    "empty-message"
+                );
+
+
+            table.innerHTML = "";
+
+
+            if (recognitions.length === 0) {
+
+                emptyMessage.style.display = "block";
+
+                return;
+
+            }
+
+
+            emptyMessage.style.display = "none";
+
+
+            recognitions.forEach(
+                recognition => {
+
+                    const row =
+                        document.createElement("tr");
+
+
+                    const personCell =
+                        document.createElement("td");
+
+                    personCell.textContent =
+                        recognition.person_name;
+
+
+                    const timeCell =
+                        document.createElement("td");
+
+                    timeCell.textContent =
+                        recognition.time;
+
+
+                    const similarityCell =
+                        document.createElement("td");
+
+                    similarityCell.textContent =
+                        recognition.similarity.toFixed(3);
+
+
+                    const trackCell =
+                        document.createElement("td");
+
+                    trackCell.textContent =
+                        recognition.track_id;
+
+
+                    row.appendChild(personCell);
+
+                    row.appendChild(timeCell);
+
+                    row.appendChild(similarityCell);
+
+                    row.appendChild(trackCell);
+
+
+                    table.appendChild(row);
+
+                }
+            );
+
+        }
+
+        catch (error) {
+
+            console.error(error);
+
+        }
+
+    }
+
+
+    // ---------------------------------------------
+    // Initialize page
+    // ---------------------------------------------
+
+    displayCurrentDate();
+
+    loadRecognitions();
+
+</script>
+
+</body>
+
+</html>
+

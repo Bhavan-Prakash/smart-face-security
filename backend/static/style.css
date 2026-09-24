@@ -1,0 +1,403 @@
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+
+body {
+
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    background: #f5f7fa;
+
+    color: #1f2937;
+
+}
+
+
+.container {
+
+    max-width: 1100px;
+
+    margin: 0 auto;
+
+    padding: 40px 25px;
+
+}
+
+
+.header {
+
+    margin-bottom: 45px;
+
+}
+
+
+.header h1 {
+
+    font-size: 32px;
+
+    font-weight: 700;
+
+}
+
+
+.subtitle {
+
+    margin-top: 6px;
+
+    color: #6b7280;
+
+    font-size: 15px;
+
+}
+
+
+h2 {
+
+    font-size: 22px;
+
+    margin-bottom: 20px;
+
+}
+
+
+/* ------------------------------------
+   Camera cards
+------------------------------------ */
+
+.camera-grid {
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            auto-fit,
+            minmax(280px, 1fr)
+        );
+
+    gap: 20px;
+
+}
+
+
+.camera-card {
+
+    position: relative;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 18px;
+
+    padding: 24px;
+
+    background: white;
+
+    border: 1px solid #e5e7eb;
+
+    border-radius: 12px;
+
+    text-decoration: none;
+
+    color: inherit;
+
+    transition:
+        transform 0.15s ease,
+        box-shadow 0.15s ease;
+
+}
+
+
+.camera-card:hover {
+
+    transform: translateY(-3px);
+
+    box-shadow:
+        0 8px 20px
+        rgba(0, 0, 0, 0.08);
+
+}
+
+
+.camera-icon {
+
+    width: 52px;
+
+    height: 52px;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    background: #eef2ff;
+
+    border-radius: 10px;
+
+    font-size: 25px;
+
+}
+
+
+.camera-info {
+
+    flex: 1;
+
+}
+
+
+.camera-info h3 {
+
+    font-size: 18px;
+
+    margin-bottom: 5px;
+
+}
+
+
+.camera-info p {
+
+    color: #6b7280;
+
+    font-size: 14px;
+
+}
+
+
+.camera-arrow {
+
+    font-size: 22px;
+
+    color: #6b7280;
+
+}
+
+
+/* ------------------------------------
+   Back button
+------------------------------------ */
+
+.back-button {
+
+    display: inline-block;
+
+    margin-bottom: 18px;
+
+    color: #4f46e5;
+
+    text-decoration: none;
+
+    font-size: 14px;
+
+}
+
+
+.back-button:hover {
+
+    text-decoration: underline;
+
+}
+
+
+/* ------------------------------------
+   Section header
+------------------------------------ */
+
+.section-header {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    margin-bottom: 20px;
+
+}
+
+
+.section-header h2 {
+
+    margin-bottom: 5px;
+
+}
+
+
+#current-date {
+
+    color: #6b7280;
+
+    font-size: 14px;
+
+}
+
+
+/* ------------------------------------
+   Refresh button
+------------------------------------ */
+
+.refresh-button {
+
+    border: none;
+
+    background: #4f46e5;
+
+    color: white;
+
+    padding: 10px 16px;
+
+    border-radius: 8px;
+
+    cursor: pointer;
+
+    font-size: 14px;
+
+}
+
+
+.refresh-button:hover {
+
+    background: #4338ca;
+
+}
+
+
+/* ------------------------------------
+   Table
+------------------------------------ */
+
+.table-container {
+
+    background: white;
+
+    border: 1px solid #e5e7eb;
+
+    border-radius: 12px;
+
+    overflow: hidden;
+
+}
+
+
+table {
+
+    width: 100%;
+
+    border-collapse: collapse;
+
+}
+
+
+thead {
+
+    background: #f9fafb;
+
+}
+
+
+th {
+
+    text-align: left;
+
+    padding: 15px 18px;
+
+    font-size: 13px;
+
+    color: #6b7280;
+
+    font-weight: 600;
+
+    border-bottom: 1px solid #e5e7eb;
+
+}
+
+
+td {
+
+    padding: 16px 18px;
+
+    border-bottom: 1px solid #f0f0f0;
+
+    font-size: 14px;
+
+}
+
+
+tbody tr:last-child td {
+
+    border-bottom: none;
+
+}
+
+
+tbody tr:hover {
+
+    background: #fafafa;
+
+}
+
+
+/* ------------------------------------
+   Empty state
+------------------------------------ */
+
+.empty-message {
+
+    display: none;
+
+    padding: 50px;
+
+    text-align: center;
+
+    color: #6b7280;
+
+    font-size: 14px;
+
+}
+
+
+/* ------------------------------------
+   Mobile
+------------------------------------ */
+
+@media (max-width: 600px) {
+
+    .container {
+
+        padding: 25px 15px;
+
+    }
+
+
+    .header h1 {
+
+        font-size: 26px;
+
+    }
+
+
+    .section-header {
+
+        align-items: flex-start;
+
+    }
+
+
+    th,
+    td {
+
+        padding: 12px;
+
+    }
+
+}
+
