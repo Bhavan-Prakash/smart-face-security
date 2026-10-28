@@ -1,0 +1,6 @@
+opencv-python>=4.10
+numpy
+ultralytics
+pyyaml
+python-dotenv
+lap

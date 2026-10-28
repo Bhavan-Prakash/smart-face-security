@@ -1,0 +1,28 @@
+# ---------------------------------------------------------------------------
+# Camera / video sources - put all RTSP details HERE.
+#
+# "source" can be:
+#   - an RTSP/HTTP stream URL   "rtsp://user:pass@192.168.1.64:554/stream1"
+#   - a video file path         "videos/faces_testing.mp4" (relative to this file)
+#   - a webcam index            0
+#
+# Don't type passwords directly. Write ${VARIABLE} and define the variable in
+# .env. If a password has special characters (@ : / # ?), URL-encode them
+# (for example @ becomes %40).
+# ---------------------------------------------------------------------------
+cameras:
+  - id: entrance                  # short unique id (used in logs / snapshot folders)
+    name: Front Entrance          # label shown on the preview window
+    source: "rtsp://${ENTRANCE_CAM_USER}:${ENTRANCE_CAM_PASS}@192.168.29.100"
+    enabled: true                 # set false to skip this camera
+
+  - id: test_video
+    name: Test Video
+    source: "faces_testing.mp4"
+    loop: true                    # restart the file when it ends (files only)
+    enabled: false
+
+  - id: laptop_webcam
+    name: Laptop Webcam
+    source: 0
+    enabled: false
