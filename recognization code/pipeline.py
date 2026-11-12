@@ -235,6 +235,8 @@ class CameraPipeline:
         event = {
             "camera_id": self.cam.id,
             "person_name": name,
+            "person_id": mem.get("person_id"),
+            "status": "unknown" if name == UNKNOWN else "recognized",
             "similarity": float(mem["similarity"]),
             "track_id": int(track_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
