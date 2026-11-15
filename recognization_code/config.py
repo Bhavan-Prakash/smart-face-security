@@ -11,6 +11,7 @@ from pathlib import Path
 # Folder that contains this file. All relative paths are resolved from here,
 # so the project works no matter where you launch it from.
 BASE_DIR = Path(__file__).resolve().parent
+_worker_token_from_process = bool(os.getenv("RECOGNITION_WORKER_TOKEN"))
 
 # Load variables from the .env file (if python-dotenv is installed).
 try:
@@ -18,6 +19,13 @@ try:
     load_dotenv(BASE_DIR / ".env")
 except ImportError:
     pass
+
+# Safe diagnostic metadata only; never retain or print the token itself.
+WORKER_TOKEN_SOURCE = (
+    "process environment" if _worker_token_from_process
+    else "recognization_code/.env" if os.getenv("RECOGNITION_WORKER_TOKEN")
+    else "missing"
+)
 
 
 # ---- small helpers that read an environment variable with a default value ----
@@ -43,7 +51,6 @@ class Settings:
     # ---------------- files / folders ----------------
     detector_model: Path = _path("DETECTOR_MODEL", "models/face_detection_yunet_2026may.onnx")
     recognizer_model: Path = _path("RECOGNIZER_MODEL", "models/w600k_mbf.onnx")
-    embeddings_dir: Path = _path("EMBEDDINGS_DIR", "embeddings_for_known_faces")
     cameras_file: Path = _path("CAMERAS_FILE", "cameras.yaml")
     snapshot_dir: Path = _path("SNAPSHOT_DIR", "snapshots")  # unknown-face crops are saved here
 
@@ -72,6 +79,10 @@ class Settings:
     # ---------------- runtime ----------------
     show_window: bool = _bool("SHOW_WINDOW", True)  # show live preview window(s)
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    # Portal workers poll camera membership/configuration. Identity refresh is
+    # deliberately separate so enrollment changes do not restart streams.
+    portal_sync_interval: int = _int("PORTAL_SYNC_INTERVAL", 30)
+    identity_sync_interval: int = _int("IDENTITY_SYNC_INTERVAL", 60)
 
 
 # One shared instance imported by the other files: `from config import settings`

@@ -9,6 +9,7 @@ remember the result under its track ID, and only re-check every few seconds.
 """
 import logging
 import time
+import uuid
 from collections import Counter, deque
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -173,6 +174,7 @@ class CameraPipeline:
                 return None  # skip tiny faces - can't be recognised reliably
             mem = {
                 "name": UNKNOWN,
+                "person_id": None,
                 "similarity": 0.0,
                 "votes": deque(maxlen=self.s.vote_window),  # last few recognition results
                 "reads": 0,           # how many recognitions we've done for this track
@@ -200,14 +202,18 @@ class CameraPipeline:
             return
         self.recognition_count += 1
 
-        name, sim = self.engine.match(emb)
+        person_id, name, sim = self.engine.match(emb)
         if sim < self.s.recognition_threshold:
             name = UNKNOWN  # best match isn't good enough
+            person_id = None
 
-        mem["votes"].append(name)
+        mem["votes"].append((person_id, name))
         mem["reads"] += 1
         mem["similarity"] = sim
-        mem["name"] = majority_vote(mem["votes"])  # smooths out one-frame mistakes
+        vote_counts = Counter(identity_id for identity_id, _ in mem["votes"])
+        winner = max(vote_counts, key=vote_counts.get)
+        selected = next(vote for vote in reversed(mem["votes"]) if vote[0] == winner)
+        mem["person_id"], mem["name"] = selected
 
     # ------------------------------------------------------------------
     # Events (what's worth reporting)
@@ -215,33 +221,36 @@ class CameraPipeline:
     def _maybe_emit(self, frame, face, track_id, mem, now):
         """Report an event when a track's confirmed identity changes."""
         name = mem["name"]
+        person_id = mem.get("person_id")
+        identity_key = str(person_id) if person_id is not None else UNKNOWN
 
-        if name == mem["announced"]:
+        if identity_key == mem["announced"]:
             return  # already reported this identity for this track
 
         # Don't shout "Unknown" after a single bad frame; wait for a few reads.
         if name == UNKNOWN and mem["reads"] < self.s.unknown_confirm_reads:
             return
 
-        mem["announced"] = name
+        mem["announced"] = identity_key
 
         # Cooldown: don't report the same person again within `event_cooldown` seconds.
         # Unknown people are keyed by track so two different strangers both get reported.
-        key = name if name != UNKNOWN else f"unknown:{track_id}"
+        key = identity_key if person_id is not None else f"unknown:{track_id}"
         if now - self.last_event.get(key, 0.0) < self.s.event_cooldown:
             return
         self.last_event[key] = now
 
         event = {
+            "event_id": str(uuid.uuid4()),
             "camera_id": self.cam.id,
             "person_name": name,
-            "person_id": mem.get("person_id"),
-            "status": "unknown" if name == UNKNOWN else "recognized",
+            "person_id": person_id,
+            "status": "recognized" if person_id is not None else "unknown",
             "similarity": float(mem["similarity"]),
             "track_id": int(track_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        if name == UNKNOWN:
+        if person_id is None:
             event["snapshot"] = self._save_snapshot(frame, face, track_id)
 
         self.on_event(event)  # hand it to whoever is listening (log now, backend later)

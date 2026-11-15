@@ -8,6 +8,7 @@ FaceEngine does four things:
   4. match()       compare a fingerprint to the known people
 """
 import logging
+import threading
 from pathlib import Path
 
 import cv2
@@ -15,7 +16,8 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-UNKNOWN = "Unknown"  # label used when nobody matches
+UNKNOWN = "Unknown"
+MODEL_VERSION = "w600k_mbf-v1"
 
 # Where the 5 landmarks should land in a standard 112x112 ArcFace face image.
 # Warping every face onto this template makes recognition much more accurate.
@@ -31,7 +33,7 @@ ARC_FACE_TEMPLATE = np.array([
 class FaceEngine:
     """Owns the two ONNX models. Create one per process."""
 
-    def __init__(self, settings):
+    def __init__(self, settings, identities=None):
         # Fail early with a clear message if a model file is missing.
         for p in (settings.detector_model, settings.recognizer_model):
             if not Path(p).exists():
@@ -47,35 +49,38 @@ class FaceEngine:
         self.recognizer = cv2.dnn.readNetFromONNX(str(settings.recognizer_model))
         self._input_size = (320, 320)
 
-        # Known people: one row per stored embedding, with a matching name list.
-        self.labels = np.empty(0, dtype=object)
-        self.matrix = np.empty((0, 512), dtype=np.float32)
-        self.load_embeddings(settings.embeddings_dir)
+        # One row per database embedding. Identity IDs, never filenames/names,
+        # are the matching keys. Enrollment uses this same model instance.
+        self._identity_index = (
+            np.empty((0, 512), dtype=np.float32),
+            np.empty(0, dtype=object),
+            np.empty(0, dtype=object),
+        )
+        self._identity_lock = threading.RLock()
+        self.load_identity_embeddings(identities or [])
 
     # ------------------------------------------------------------------
     # Known faces
     # ------------------------------------------------------------------
-    def load_embeddings(self, directory):
-        """
-        Load every <person_name>.npy file in `directory`.
-        The file name (without .npy) becomes the person's name.
-        Can be called again later to pick up newly enrolled people.
-        """
-        labels, rows = [], []
-        for f in sorted(Path(directory).glob("*.npy")):
-            emb = np.load(f).astype(np.float32)
-            emb = emb.reshape(-1, emb.shape[-1])                     # always 2-D: (n, 512)
-            emb /= np.linalg.norm(emb, axis=1, keepdims=True) + 1e-12  # make each unit length
-            rows.append(emb)
-            labels.extend([f.stem] * len(emb))
-
-        if rows:
-            # Stack everyone into ONE matrix so matching is a single fast multiplication.
-            self.matrix = np.vstack(rows)
-            self.labels = np.array(labels, dtype=object)
-            log.info("Loaded %d embeddings for %d people", len(labels), len(set(labels)))
-        else:
-            log.warning("No embeddings found in %s - everyone will be 'Unknown'", directory)
+    def load_identity_embeddings(self, records):
+        """Atomically replace the in-memory index from authorized database rows."""
+        vectors, person_ids, names = [], [], []
+        for record in records:
+            vector = np.asarray(record["embedding"], dtype=np.float32).reshape(-1)
+            if vector.shape != (512,) or not np.isfinite(vector).all():
+                raise ValueError("Worker returned an invalid face embedding")
+            norm = float(np.linalg.norm(vector))
+            if not 0.99 <= norm <= 1.01:
+                raise ValueError("Worker returned a non-normalized face embedding")
+            vectors.append(vector / norm)
+            person_ids.append(str(record["person_id"]))
+            names.append(str(record["name"]))
+        matrix = np.vstack(vectors) if vectors else np.empty((0, 512), dtype=np.float32)
+        # Readers take the same lock, so a refresh can never expose partially
+        # rebuilt tenant data to a frame-processing thread.
+        with getattr(self, "_identity_lock", threading.RLock()):
+            self._identity_index = (matrix, np.asarray(person_ids, dtype=object), np.asarray(names, dtype=object))
+        log.info("Loaded %d database embeddings for %d people", len(vectors), len(set(person_ids)))
 
     # ------------------------------------------------------------------
     # Detection
@@ -134,10 +139,12 @@ class FaceEngine:
     def match(self, embedding):
         """
         Compare one embedding to all known ones.
-        Returns (best_name, similarity). Similarity ~1.0 = same person, ~0 = different.
+        Returns (database_person_id, current_name, similarity).
         """
-        if len(self.labels) == 0:
-            return UNKNOWN, 0.0
-        sims = self.matrix @ embedding   # cosine similarity against everyone at once
-        i = int(np.argmax(sims))         # index of the best match
-        return str(self.labels[i]), float(sims[i])
+        with getattr(self, "_identity_lock", threading.RLock()):
+            matrix, person_ids, names = self._identity_index
+            if len(person_ids) == 0:
+                return None, UNKNOWN, 0.0
+            sims = matrix @ embedding   # cosine similarity against everyone at once
+            i = int(np.argmax(sims))         # index of the best match
+            return str(person_ids[i]), str(names[i]), float(sims[i])

@@ -38,6 +38,8 @@ class CameraConfig:
     kind: str     # "stream" | "file" | "webcam"
     enabled: bool = True
     loop: bool = True  # only used for video files
+    owner_id: str | None = None  # portal-only tenant metadata; never trusted for events
+    config_version: str | None = None
 
     @property
     def safe_source(self) -> str:
@@ -210,7 +212,7 @@ class VideoFileReader:
 
 def open_source(cam: CameraConfig):
     """Return the right reader (file or live stream) for this camera."""
-    log.info("[%s] opening %s source: %s", cam.id, cam.kind, cam.safe_source)
+    log.info("[%s] opening %s source", cam.id, cam.kind)
     if cam.kind == "file":
         return VideoFileReader(cam.source, loop=cam.loop, name=cam.id)
     return StreamReader(cam.source, name=cam.id)
