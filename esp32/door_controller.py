@@ -5,6 +5,7 @@ import gc
 import uasyncio as asyncio
 import ujson as json
 import network
+import time
 from machine import Pin
 
 from config import (
@@ -106,6 +107,14 @@ def valid_command_id(command_id):
             return False
 
     return True
+
+
+def valid_expiry(value):
+    """Fail closed when the board has no synchronized epoch clock."""
+    if not isinstance(value, int):
+        return False
+    now = time.time()
+    return now >= 1700000000 and now <= value and value - now <= 60
 
 
 # --------------------------------------------------
@@ -401,6 +410,15 @@ async def handle(reader, writer):
                     "success": False,
                     "error": "Valid command_id required"
                 }
+            )
+            return
+
+        # Remote approvals are short-lived one-time commands. An ESP32 must
+        # have NTP/RTC time synchronized before it will release the relay.
+        if body.get("alert_id") is not None and not valid_expiry(body.get("expires_at_unix")):
+            await send_response(
+                writer, 400,
+                {"success": False, "error": "Valid unexpired command expiry required"}
             )
             return
 

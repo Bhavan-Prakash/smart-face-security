@@ -8,6 +8,8 @@ DOOR_RELAY_ACTIVE_LOW = True
 DOOR_UNLOCK_DURATION = 5
 DOOR_MAX_UNLOCK_DURATION = 10
 DOOR_API_TOKEN = ""
+# Remote-approval commands require a synchronized epoch clock. Configure NTP
+# for your MicroPython build before enabling the relay.
 
 # Safe defaults: initialize relay in secure/locked state and simulate requests.
 DOOR_RELAY_ENABLED = False
