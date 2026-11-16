@@ -8,6 +8,8 @@ Key idea: recognition is slow, tracking is fast. So we recognise a face once,
 remember the result under its track ID, and only re-check every few seconds.
 """
 import logging
+import queue
+import threading
 import time
 import uuid
 from collections import Counter, deque
@@ -21,6 +23,42 @@ from ultralytics.trackers.byte_tracker import BYTETracker
 from face_engine import UNKNOWN
 
 log = logging.getLogger(__name__)
+
+
+class UnknownSnapshotWriter:
+    """Writes bounded unknown-person JPEGs off the camera processing thread."""
+    def __init__(self, folder):
+        self.folder = folder
+        self.jobs = queue.Queue(maxsize=100)
+        self.thread = threading.Thread(target=self._run, daemon=True, name="unknown-snapshot-writer")
+        self.thread.start()
+
+    def submit(self, event_id, crop):
+        path = self.folder / f"{event_id}.jpg"
+        try:
+            self.jobs.put_nowait((path, crop.copy()))
+            return str(path)
+        except queue.Full:
+            log.warning("Unknown snapshot queue is full; event will be recorded without an image")
+            return None
+
+    def _run(self):
+        while True:
+            path, crop = self.jobs.get()
+            try:
+                self.folder.mkdir(parents=True, exist_ok=True)
+                height, width = crop.shape[:2]
+                longest = max(height, width)
+                if longest > 960:
+                    scale = 960 / longest
+                    crop = cv2.resize(crop, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA)
+                ok, encoded = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+                if not ok or len(encoded) > 1_000_000:
+                    log.warning("Unknown snapshot encoding failed or exceeded size limit")
+                    continue
+                path.write_bytes(encoded.tobytes())
+            except Exception:
+                log.exception("Could not save unknown snapshot")
 
 
 # ----------------------------------------------------------------------
@@ -105,6 +143,7 @@ class CameraPipeline:
         self.memory = {}          # track_id -> what we know about that face
         self.last_event = {}      # who was last reported, and when (for the cooldown)
         self.recognition_count = 0  # total recognitions done (shown on screen)
+        self.snapshot_writer = UnknownSnapshotWriter(self.s.snapshot_dir / str(self.cam.id))
 
     # ------------------------------------------------------------------
     # Called once per frame
@@ -251,25 +290,22 @@ class CameraPipeline:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         if person_id is None:
-            event["snapshot"] = self._save_snapshot(frame, face, track_id)
+            # Copy the crop now; JPEG compression and I/O happen on the writer thread.
+            event["snapshot_path"] = self._queue_snapshot(frame, face, event["event_id"])
 
         self.on_event(event)  # hand it to whoever is listening (log now, backend later)
 
-    def _save_snapshot(self, frame, face, track_id):
-        """Save a crop of an unknown face to disk as evidence. Returns the file path."""
+    def _queue_snapshot(self, frame, face, event_id):
+        """Safely copy a padded unknown-face crop for asynchronous JPEG writing."""
         try:
             x, y, w, h = (int(v) for v in face[:4])
             pad = int(0.25 * max(w, h))  # include a bit of surroundings
             crop = frame[max(0, y - pad): y + h + pad, max(0, x - pad): x + w + pad]
             if crop.size == 0:
                 return None
-            folder = self.s.snapshot_dir / self.cam.id
-            folder.mkdir(parents=True, exist_ok=True)
-            path = folder / f"{datetime.now():%Y%m%d_%H%M%S}_track{track_id}.jpg"
-            cv2.imwrite(str(path), crop)
-            return str(path)
+            return self.snapshot_writer.submit(event_id, crop)
         except Exception:
-            log.exception("Could not save snapshot")
+            log.exception("Could not queue unknown snapshot")
             return None
 
     # ------------------------------------------------------------------

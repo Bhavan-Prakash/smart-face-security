@@ -32,6 +32,7 @@ from config import WORKER_TOKEN_SOURCE, settings
 from camera_source import CameraConfig, load_cameras, open_source
 from face_engine import FaceEngine, MODEL_VERSION
 from pipeline import CameraPipeline
+from recognition_event_debouncer import DeliveryResult, RecognitionEventDebouncer
 
 LOG_FORMAT = "%(asctime)s [%(processName)s] %(levelname)s %(name)s: %(message)s"
 
@@ -60,71 +61,93 @@ def draw_overlay(frame, cam, fps, recognitions):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
 
-def _deliver_events(events):
+def _post_event(event):
+    """Post one event once; retry policy belongs to the per-user debouncer."""
     endpoint = os.getenv("PORTAL_API_URL", "").strip().rstrip("/") + "/api/recognition-events"
     token = _worker_token()
+    context = "eventId=%s | cameraId=%s | trackId=%s | eventStatus=%s | submittedAt=%s"
+    context_values = (event.get("event_id", "unassigned"), event.get("camera_id", "unknown"), event.get("track_id", "unknown"), event.get("status", "unknown"), event.get("timestamp", "unknown"))
+    if not endpoint.strip("/") or not token:
+        logging.getLogger("event").error("Recognition event not delivered: portal API/token is not configured | " + context, *context_values)
+        return DeliveryResult(success=False, retryable=False)
+    # Local paths and worker-only tenant routing metadata never leave this
+    # process. A completed, bounded JPEG is encoded only on this background
+    # delivery path, never on the camera processing thread.
+    api_event = {key: value for key, value in event.items() if key not in {"snapshot", "snapshot_path", "_tenant_id"}}
+    snapshot_path = event.get("snapshot_path")
+    if event.get("status") == "unknown" and isinstance(snapshot_path, str):
+        try:
+            path = os.path.realpath(snapshot_path)
+            root = os.path.realpath(str(settings.snapshot_dir)) + os.sep
+            if path.startswith(root) and path.lower().endswith(".jpg") and os.path.getsize(path) <= 1_000_000:
+                with open(path, "rb") as snapshot_file:
+                    jpeg = snapshot_file.read()
+                if jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9"):
+                    api_event["snapshot_jpeg"] = base64.b64encode(jpeg).decode("ascii")
+        except (OSError, ValueError):
+            # Snapshot failure must never prevent recording the unknown event.
+            logging.getLogger("event").warning("Unknown snapshot unavailable; submitting event without image | eventId=%s", event.get("event_id"))
+    payload = json.dumps(api_event).encode("utf-8")
+    try:
+        req = urllib.request.Request(endpoint, payload, {
+            "Authorization": f"Bearer {token}", "Content-Type": "application/json",
+            "X-Request-ID": str(event.get("event_id") or "unassigned"),
+        }, method="POST")
+        with urllib.request.urlopen(req, timeout=3) as response:
+            result = json.load(response)
+            if not isinstance(result, dict):
+                raise json.JSONDecodeError("Expected an object response", "", 0)
+            logging.getLogger("event").info("Recognition event accepted | " + context + " | httpStatus=%s | databaseEventId=%s | duplicate=%s", *context_values, response.status, result.get("eventId"), result.get("duplicate", False))
+            return DeliveryResult(success=True)
+    except urllib.error.HTTPError as error:
+        logging.getLogger("event").error("Recognition event rejected by portal | " + context + " | httpStatus=%s | backendError=%s", *context_values, error.code, _safe_event_api_error(error))
+        return DeliveryResult(success=False, retryable=error.code >= 500)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        logging.getLogger("event").error("Portal returned invalid JSON for recognition event | " + context, *context_values)
+        return DeliveryResult(success=False, retryable=True)
+    except (TimeoutError, socket.timeout, urllib.error.URLError) as error:
+        logging.getLogger("event").warning("Recognition event delivery failed | " + context + " | errorType=%s", *context_values, type(error).__name__)
+        return DeliveryResult(success=False, retryable=True)
+
+
+def _request_door_access(event):
+    """Immediately ask the portal to authorize one recognized event for access.
+
+    This is deliberately independent of debounced recognition-history delivery.
+    The portal owns all authorization and never trusts worker tenant metadata.
+    """
+    if event.get("status") != "recognized" or not event.get("person_id"):
+        return
+    base = os.getenv("PORTAL_API_URL", "").strip().rstrip("/")
+    token = _worker_token()
+    event_id = str(event.get("event_id") or "")
+    if not base or not token or not event_id:
+        logging.getLogger("door_access").warning("[DOOR_ACCESS] Access request not sent: portal configuration is unavailable | cameraId=%s", event.get("camera_id"))
+        return
+    payload = {key: value for key, value in event.items() if key not in {"snapshot", "_tenant_id"}}
+    try:
+        logging.getLogger("door_access").info("[DOOR_ACCESS] Recognition received; requesting portal authorization | eventId=%s | personId=%s | cameraId=%s", event_id, event.get("person_id"), event.get("camera_id"))
+        request = urllib.request.Request(
+            f"{base}/api/door-access", json.dumps(payload).encode("utf-8"),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "X-Request-ID": event_id}, method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = json.load(response)
+            if not isinstance(body, dict) or body.get("accepted") is not True:
+                raise json.JSONDecodeError("Expected accepted door access response", "", 0)
+            logging.getLogger("door_access").info("[DOOR_ACCESS] Portal completed access evaluation | eventId=%s | personId=%s | cameraId=%s | granted=%s | reason=%s", event_id, event.get("person_id"), event.get("camera_id"), body.get("granted"), body.get("reason"))
+    except urllib.error.HTTPError as error:
+        logging.getLogger("door_access").warning("[DOOR_ACCESS] Portal denied or rejected access request | eventId=%s | personId=%s | cameraId=%s | httpStatus=%s | error=%s", event_id, event.get("person_id"), event.get("camera_id"), error.code, _safe_event_api_error(error))
+    except (urllib.error.URLError, TimeoutError, socket.timeout, json.JSONDecodeError, UnicodeDecodeError) as error:
+        # Never retry an unlock automatically: an interrupted request may have
+        # reached the controller. The ESP32 command ID still makes duplicates safe.
+        logging.getLogger("door_access").warning("[DOOR_ACCESS] Portal unavailable; access command not retried | eventId=%s | personId=%s | cameraId=%s | errorType=%s", event_id, event.get("person_id"), event.get("camera_id"), type(error).__name__)
+
+
+def _deliver_events(events):
+    """Legacy non-portal delivery worker; portal mode uses the shared debouncer."""
     while True:
-        event = events.get()
-        if not endpoint.strip("/") or not token:
-            logging.getLogger("event").warning("Recognition event not delivered: portal API/token is not configured")
-            continue
-        # Snapshot paths are local implementation details; the portal API does
-        # not accept snapshot uploads, so keep them out of the request body.
-        api_event = {key: value for key, value in event.items() if key != "snapshot"}
-        payload = json.dumps(api_event).encode("utf-8")
-        event_id = str(event.get("event_id") or "unassigned")
-        context = "eventId=%s | cameraId=%s | trackId=%s | eventStatus=%s | submittedAt=%s"
-        context_values = (event_id, event.get("camera_id", "unknown"), event.get("track_id", "unknown"), event.get("status", "unknown"), event.get("timestamp", "unknown"))
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(
-                    endpoint,
-                    payload,
-                    {
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json",
-                        "X-Request-ID": event_id,
-                    },
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=3) as response:
-                    result = json.load(response)
-                    if not isinstance(result, dict):
-                        raise json.JSONDecodeError("Expected an object response", "", 0)
-                    logging.getLogger("event").info(
-                        "Recognition event accepted | " + context + " | httpStatus=%s | databaseEventId=%s | duplicate=%s",
-                        *context_values, response.status, result.get("eventId"), result.get("duplicate", False),
-                    )
-                    break
-            except urllib.error.HTTPError as error:
-                api_error = _safe_event_api_error(error)
-                logging.getLogger("event").error(
-                    "Recognition event rejected by portal | " + context + " | httpStatus=%s | backendError=%s",
-                    *context_values, error.code, api_error,
-                )
-                break
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                logging.getLogger("event").error(
-                    "Portal returned invalid JSON for recognition event | " + context,
-                    *context_values,
-                )
-                break
-            except (TimeoutError, socket.timeout):
-                if attempt == 2:
-                    logging.getLogger("event").error("Recognition event delivery timed out after retries")
-                else:
-                    time.sleep(0.25 * (2 ** attempt))
-            except urllib.error.URLError as error:
-                if isinstance(error.reason, (TimeoutError, socket.timeout)):
-                    if attempt == 2:
-                        logging.getLogger("event").error("Recognition event delivery timed out after retries")
-                    else:
-                        time.sleep(0.25 * (2 ** attempt))
-                else:
-                    if attempt == 2:
-                        logging.getLogger("event").error("Recognition event delivery failed: portal is unreachable | " + context, *context_values)
-                    else:
-                        time.sleep(0.25 * (2 ** attempt))
+        _post_event(events.get())
 
 
 def _safe_event_api_error(error):
@@ -163,7 +186,7 @@ def _safe_worker_api_error(error):
         return "request rejected (response body unavailable or invalid)"
 
 
-def handle_event(event, events):
+def handle_event(event, events, owner_id=None):
     """
     Called whenever a person is recognised / an unknown face is confirmed.
 
@@ -174,7 +197,10 @@ def handle_event(event, events):
         event.get("event_id", "unassigned"), event["camera_id"], event["track_id"], event.get("status", "unknown"), event.get("timestamp", "unknown"),
     )
     try:
-        events.put_nowait(event)
+        queued_event = dict(event)
+        if owner_id:
+            queued_event["_tenant_id"] = str(owner_id)
+        events.put_nowait(queued_event)
     except queue.Full:
         logging.getLogger("event").error("Recognition delivery queue is full; dropping event")
 
@@ -239,7 +265,7 @@ def _refresh_identities(engine, camera_id, stop_event):
             log.warning("Identity embedding refresh failed; retaining previous authorized index | cameraId=%s", camera_id)
 
 
-def run_camera(cam, show, portal_mode=False, stop_event=None):
+def run_camera(cam, show, portal_mode=False, stop_event=None, shared_events=None):
     """Runs inside its own process: one camera, from connection to shutdown."""
     # Child processes start fresh, so logging must be configured again here.
     logging.basicConfig(level=settings.log_level, format=LOG_FORMAT)
@@ -252,9 +278,10 @@ def run_camera(cam, show, portal_mode=False, stop_event=None):
         stop_event = threading.Event()
     if portal_mode:
         threading.Thread(target=_refresh_identities, args=(engine, cam.id, stop_event), daemon=True, name=f"identity-refresh-{cam.id}").start()
-    events = queue.Queue(maxsize=100)
-    threading.Thread(target=_deliver_events, args=(events,), daemon=True, name="event-delivery").start()
-    pipeline = CameraPipeline(cam, settings, engine, on_event=lambda event: handle_event(event, events))
+    events = shared_events if shared_events is not None else queue.Queue(maxsize=100)
+    if shared_events is None:
+        threading.Thread(target=_deliver_events, args=(events,), daemon=True, name="event-delivery").start()
+    pipeline = CameraPipeline(cam, settings, engine, on_event=lambda event: handle_event(event, events, cam.owner_id if portal_mode else None))
     reader = open_source(cam)
 
     fps, prev = 0.0, time.time()
@@ -371,10 +398,11 @@ def load_portal_cameras():
 
 class PortalCameraSupervisor:
     """Reconcile portal cameras without interrupting unaffected streams."""
-    def __init__(self, context, show, start_target=run_camera):
+    def __init__(self, context, show, start_target=run_camera, shared_events=None):
         self.context = context
         self.show = show
         self.start_target = start_target
+        self.shared_events = shared_events
         self.procs = {}  # camera id -> (CameraConfig, Process, Event)
         self.log = logging.getLogger("supervisor")
 
@@ -384,7 +412,7 @@ class PortalCameraSupervisor:
 
     def start(self, camera):
         stop_event = self.context.Event()
-        process = self.context.Process(target=self.start_target, args=(camera, self.show, True, stop_event), name=camera.id)
+        process = self.context.Process(target=self.start_target, args=(camera, self.show, True, stop_event, self.shared_events), name=camera.id)
         process.start()
         self.procs[camera.id] = (camera, process, stop_event)
         self.log.info("Started camera process | cameraId=%s", camera.id)
@@ -428,6 +456,25 @@ class PortalCameraSupervisor:
             self.stop(camera_id)
 
 
+def _dispatch_portal_events(events, debouncer, stop_event):
+    """Bridge child camera-process events into the single tenant debouncer."""
+    log = logging.getLogger("event")
+    while not stop_event.is_set():
+        try:
+            event = events.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        if not isinstance(event, dict):
+            log.warning("Ignoring malformed recognition event from camera process")
+            continue
+        tenant_id = event.get("_tenant_id")
+        if not isinstance(tenant_id, str) or not re.fullmatch(r"[1-9]\d*", tenant_id):
+            log.error("Ignoring recognition event without portal tenant metadata | cameraId=%s", event.get("camera_id"))
+            continue
+        _request_door_access(event)
+        debouncer.submit(tenant_id, event)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Face recognition security system")
     parser.add_argument("--cameras", default=str(settings.cameras_file), help="path to cameras.yaml")
@@ -448,7 +495,13 @@ def main():
     # Portal mode is a persistent central worker: an empty account/camera set
     # is normal, and temporary API failures retain already-running cameras.
     if args.portal:
-        supervisor = PortalCameraSupervisor(ctx, show)
+        event_queue = ctx.Queue(maxsize=1000)
+        debounce_stop = threading.Event()
+        debouncer = RecognitionEventDebouncer(_post_event, interval_seconds=settings.recognition_debounce_seconds)
+        debouncer.start()
+        dispatcher = threading.Thread(target=_dispatch_portal_events, args=(event_queue, debouncer, debounce_stop), daemon=True, name="portal-event-dispatch")
+        dispatcher.start()
+        supervisor = PortalCameraSupervisor(ctx, show, shared_events=event_queue)
         try:
             while True:
                 try:
@@ -464,6 +517,9 @@ def main():
             log.info("Shutting down central worker...")
         finally:
             supervisor.shutdown()
+            debounce_stop.set()
+            dispatcher.join(timeout=2)
+            debouncer.shutdown(flush=True)
         return 0
 
     # File mode preserves the previous one-time YAML workflow.

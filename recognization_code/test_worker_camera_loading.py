@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
-from main import PortalCameraLoadError, PortalCameraSupervisor, _safe_event_api_error, load_portal_cameras
+from main import PortalCameraLoadError, PortalCameraSupervisor, _request_door_access, _safe_event_api_error, load_portal_cameras
 from camera_source import CameraConfig
 
 
@@ -115,6 +115,22 @@ class PortalCameraLoadingTests(unittest.TestCase):
         self.assertNotIn("dummy-secret", message)
         self.assertNotIn("user:pass", message)
         self.assertLessEqual(len(message), 300)
+
+    @patch("urllib.request.urlopen")
+    def test_recognized_event_requests_immediate_portal_door_authorization(self, urlopen):
+        urlopen.return_value = FakeResponse(b'{"accepted":true,"granted":true,"reason":"dry_run"}')
+        _request_door_access({"event_id": "evt-1", "camera_id": "42", "person_id": "9", "status": "recognized", "track_id": 2, "timestamp": "2026-11-15T00:00:00+00:00", "_tenant_id": "7"})
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://localhost:3000/api/door-access")
+        self.assertEqual(request.get_header("Authorization"), "Bearer unit-test-token")
+        payload = json.loads(request.data)
+        self.assertNotIn("_tenant_id", payload)
+        self.assertEqual(payload["person_id"], "9")
+
+    @patch("urllib.request.urlopen")
+    def test_unknown_recognition_never_requests_door_access(self, urlopen):
+        _request_door_access({"event_id": "evt-2", "camera_id": "42", "person_id": None, "status": "unknown"})
+        urlopen.assert_not_called()
 
 
 class _FakeEvent:

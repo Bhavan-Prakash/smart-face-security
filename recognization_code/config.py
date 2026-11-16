@@ -83,6 +83,9 @@ class Settings:
     # deliberately separate so enrollment changes do not restart streams.
     portal_sync_interval: int = _int("PORTAL_SYNC_INTERVAL", 30)
     identity_sync_interval: int = _int("IDENTITY_SYNC_INTERVAL", 60)
+    # One fixed, latest-event-wins delivery window per portal user. This only
+    # affects outgoing portal notifications, never face recognition itself.
+    recognition_debounce_seconds: int = _int("RECOGNITION_DEBOUNCE_SECONDS", 120)
 
 
 # One shared instance imported by the other files: `from config import settings`
